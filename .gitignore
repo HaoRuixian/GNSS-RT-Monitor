@@ -1,0 +1,19 @@
+# Python 编译文件
+__pycache__/
+*.pyc
+
+# 虚拟环境 (根据你的文件夹名修改，通常是 venv)
+venv/
+env/
+.venv/
+
+# 编辑器配置
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
+
+# 敏感配置文件 (防止密码泄露)
+config.py
