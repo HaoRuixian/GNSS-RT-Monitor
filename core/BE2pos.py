@@ -22,7 +22,7 @@ def brdc2pos(eph_data, sys_type, t_obs_gpst):
         return None    
     
     if sys_type == 'GLO':
-        sat_pos_final = calc_glo_pos(t_obs_gpst, eph_data)
+        sat_pos_final = SatPos_brdc_glo(t_obs_gpst, eph_data)
     else:
         sat_pos_final = SatPos_brdc(t_obs_gpst, eph_data)
     
@@ -160,20 +160,15 @@ def SatPos_brdc(t, eph):
     return sat_p, sat_v
 
 
-def calc_glo_pos(t_sow, eph):
+def SatPos_brdc_glo(t_sow, eph):
     """
-    计算 GLONASS 卫星位置 (RK4 积分, 对应 MATLAB SatPos_brdc_GLO)
+    计算 GLONASS 卫星位置 (RK4 积分)
     """
-    # 提取初始状态向量 (PZ-90)
-    # MATLAB 代码中输入单位是 km, 内部乘以 1000 转为 m
-    # 假设输入 eph 字典单位已经是 km (符合广播星历标准)
     pos = np.array([eph['X'], eph['Y'], eph['Z']]) * 1000.0
     vel = np.array([eph['Vx'], eph['Vy'], eph['Vz']]) * 1000.0
     acc = np.array([eph['Ax'], eph['Ay'], eph['Az']]) * 1000.0
     
-    # MATLAB 代码逻辑: toe = MessageFrameTime + 900
-    # 注意: 通常 GLONASS toe 即为 tb，这里遵循参考代码的 +900 逻辑
-    toe = eph['Tb'] + 900.0 
+    toe = eph['Tb'] # Time of ephemeris (seconds within week)
     
     # 执行 Runge-Kutta 4 积分
     return runge_kutta_4(toe, pos, vel, acc, t_sow)
@@ -233,7 +228,7 @@ def runge_kutta_4(toe, pos, vel, acc, t_target):
         if is_last:
             break
             
-    return current_pos
+    return current_pos, current_vel
 
 def accel_pz90(r_vec, v_vec, acc_sl):
     """

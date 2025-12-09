@@ -17,3 +17,9 @@ env/
 
 # 敏感配置文件 (防止密码泄露)
 config.py
+
+# 打包输出文件夹
+bin/
+dist/
+build/
+*.spec

@@ -4,6 +4,7 @@ Adapted for pyrtcm's flattened attribute structure.
 """
 import numpy as np
 from core.data_models import EpochObservation, SatelliteState, SignalData
+from datetime import datetime, timedelta, timezone
 from core.geo_utils import calculate_az_el, get_freq
 import core.BE2pos as BE2pos 
 import config
@@ -28,7 +29,7 @@ class RTCMHandler:
             self._handle_glo_eph(msg)
         elif msg_id in ["1045", "1046"]:
             self._handle_gal_eph(msg)
-        elif msg_id in ["1042", "63"]: # 1042 is standard BDS, 63 is draft
+        elif msg_id in ["1042", "63"]: # 1042 is standard BDS
             self._handle_bds_eph(msg)
             
         # --- MSM  ---
@@ -120,7 +121,7 @@ class RTCMHandler:
             eph = {
                 'SatType': 'GAL',
                 'PRN': prn,
-                'Week': int(msg.DF289),
+                'Week': int(msg.DF289)+1024,
                 'Toe': float(msg.DF304),
                 'Toc': float(msg.DF293),
                 'IODNav': int(msg.DF290),
@@ -163,52 +164,53 @@ class RTCMHandler:
     def _handle_glo_eph(self, msg):
         """
         Maps RTCM 1020 to GLONASS Cartesian State Vectors.
-        Requires transforming PZ-90 definitions.
         """
         try:
-            # DF038: Satellite Slot Number (PRN)
             prn = int(msg.DF038)
             key = f"R{prn:02d}"
             
-            # GLONASS 时间处理
-            # DF110 (tb) 是 15分钟间隔的索引 (0-96)
-            # 为了方便计算，这里将其转换为当天的秒数，或者保留原值并在计算函数中处理
-            # 这里我们转换为秒：index * 900
-            tb_index = int(msg.DF110)
-            tb_seconds = tb_index * 900.0
+            # Table 3.4-6: DF value 7 corresponds to channel 0.
+            freq_chn = int(msg.DF040) - 7
             
+            tb_seconds = float(msg.DF110) * 15 * 60.0 - 3*60*60
+            
+            # Time tk processing (bitwise parsing)
+            # DF107 is bit(12): hhhhh mmmmmm s
+            tk_raw = int(msg.DF107)
+            tk_h = (tk_raw >> 7) & 0x1F
+            tk_m = (tk_raw >> 1) & 0x3F
+            tk_s = (tk_raw & 0x01) * 30
+            tk_seconds = tk_h * 3600 + tk_m * 60 + tk_s - 3*60*60
+
             eph = {
                 'SatType': 'GLO',
                 'PRN': prn,
-                # 注意：计算函数需要 'Tb' 或 'Toe'
-                'Tb': tb_seconds,      # Time of day (seconds)
-                'tk': float(msg.DF107),# 小时内的时间偏移? 这里的DF107定义是BIT(12)，需确认 pyrtcm 是否解析为数值
-                'FreqChannel': int(msg.DF040), # 频率号，对计算频率很重要
+                'Tb': tb_seconds+ self.gps_day_of_week() * 24*3600,      # Time of ephemeris (seconds within day)
+                'tk': tk_seconds+ self.gps_day_of_week() * 24*3600,      # Time within frame
+                'FreqChannel': freq_chn, 
                 
-                # 位置 (km -> m conversion will be done in calculation function or here)
-                # pyrtcm 通常返回 km 单位 (因为 scale 是 P2_11 等，结果是 km)
+                # Position in km
                 'X': float(msg.DF112),
                 'Y': float(msg.DF115),
                 'Z': float(msg.DF118),
                 
-                # 速度
+                # Velocity in km/s
                 'Vx': float(msg.DF111),
                 'Vy': float(msg.DF114),
                 'Vz': float(msg.DF117),
                 
-                # 加速度 (Solar/Lunar term)
+                # Acceleration (Solar/Lunar) in km/s²
                 'Ax': float(msg.DF113),
                 'Ay': float(msg.DF116),
                 'Az': float(msg.DF119),
                 
-                # 钟差
-                'TauN': float(msg.DF124), # Satellite clock bias
-                'GammaN': float(msg.DF121),# Relative frequency offset
+                # Clock
+                'TauN': float(msg.DF124),   # Bias (sec)
+                'GammaN': float(msg.DF121), # Rel. Freq. Offset (dimensionless)
                 
-                'Health': int(msg.DF104) # Bn (Health)
+                'Health': int(msg.DF104) 
             }
             
-            # GLONASS 更新通常基于 tb
             self._update_cache(key, eph, 'Tb')
             
         except AttributeError:
@@ -220,68 +222,66 @@ class RTCMHandler:
     def _handle_bds_eph(self, msg):
         """
         Maps RTCM 1042 to BDS Keplerian parameters.
-        Based on RTCM 10403.3 Amendment 2 (or similar) definitions provided.
+        Fixed: Units (semi-circles to radians) and Time Basis (BDS Week to GPS Week).
         """
         try:
-            # 根据提供的定义: DF488 是 BDS Satellite ID
             if not hasattr(msg, "DF488"):
                 return
             
             prn = int(msg.DF488)
             key = f"C{prn:02d}"
             
-            # 构建星历字典
-            # 键名必须与 calc_kepler_pos 函数中的变量名一致
+            # BDS Week starts from 2006, GPS from 1980. Offset is 1356 weeks.
+            # Most positioning libraries expect a continuous GPS-aligned week number.
+            bds_week = int(msg.DF489)
+            gps_week_aligned = bds_week + 1356 
+
             eph = {
                 'SatType': 'BDS',
                 'PRN': prn,
-                'Week': int(msg.DF489),       # DF489: BDS Week Number
+                'Week': gps_week_aligned,     # CRITICAL FIX 1: Time Basis Alignment
                 
                 # 时间参数
-                'Toe': float(msg.DF505),      # DF505: BDS Toe (Time of Ephemeris)
-                'Toc': float(msg.DF493),      # DF493: BDS Toc (Time of Clock)
-                'AODE': int(msg.DF492),       # DF492: BDS AODE (Age of Data, Ephemeris)
-                'AODC': int(msg.DF497),       # DF497: BDS AODC (Age of Data, Clock)
+                'Toe': float(msg.DF505),      # BDS Week Seconds
+                'Toc': float(msg.DF493),      
+                'AODE': int(msg.DF492),       
+                'AODC': int(msg.DF497),       
                 
                 # 开普勒轨道参数
-                'sqrtA': float(msg.DF504),        # DF504: BDS A½
-                'Eccentricity': float(msg.DF502), # DF502: BDS e
-                'M0': float(msg.DF500),           # DF500: BDS M0
-                'omega': float(msg.DF511),        # DF511: BDS ω (Argument of Perigee)
-                'i0': float(msg.DF509),           # DF509: BDS i0
-                'OMEGA0': float(msg.DF507),       # DF507: BDS Ω0
-                'Delta_n': float(msg.DF499),      # DF499: BDS ∆n
-                'OMEGA_DOT': float(msg.DF512),    # DF512: BDS ΩDOT
-                'IDOT': float(msg.DF491),         # DF491: BDS IDOT
+                'sqrtA': float(msg.DF504),        
+                'Eccentricity': float(msg.DF502), 
                 
-                # 摄动参数 (Harmonic Corrections)
-                'Cuc': float(msg.DF501),      # DF501
-                'Cus': float(msg.DF503),      # DF503
-                'Crc': float(msg.DF510),      # DF510
-                'Crs': float(msg.DF498),      # DF498
-                'Cic': float(msg.DF506),      # DF506
-                'Cis': float(msg.DF508),      # DF508
+                # CRITICAL FIX 2: Multiply by PI (Semi-circles -> Radians)
+                'M0': float(msg.DF500) * math.pi,           
+                'omega': float(msg.DF511) * math.pi,        
+                'i0': float(msg.DF509) * math.pi,           
+                'OMEGA0': float(msg.DF507) * math.pi,       
+                'Delta_n': float(msg.DF499) * math.pi,      
+                'OMEGA_DOT': float(msg.DF512) * math.pi,    
+                'IDOT': float(msg.DF491) * math.pi,         
                 
-                # 卫星钟差参数 (a0, a1, a2 -> af0, af1, af2)
-                'af0': float(msg.DF496),      # DF496: BDS a0
-                'af1': float(msg.DF495),      # DF495: BDS a1
-                'af2': float(msg.DF494),      # DF494: BDS a2
+                # 摄动参数
+                'Cuc': float(msg.DF501),      
+                'Cus': float(msg.DF503),      
+                'Crc': float(msg.DF510),      
+                'Crs': float(msg.DF498),      
+                'Cic': float(msg.DF506),      
+                'Cis': float(msg.DF508),      
                 
-                # 群波延迟与健康状况
-                'TGD1': float(msg.DF513),     # DF513: TGD1
-                'TGD2': float(msg.DF514),     # DF514: TGD2
-                'Health': int(msg.DF515),     # DF515: SV Health
+                # 卫星钟差参数
+                'af0': float(msg.DF496),      
+                'af1': float(msg.DF495),      
+                'af2': float(msg.DF494),      
                 
-                # 其他信息 (可选，视需要存储)
-                'URAI': int(msg.DF490)        # DF490: User Range Accuracy Index
+                'TGD1': float(msg.DF513),     
+                'TGD2': float(msg.DF514),     
+                'Health': int(msg.DF515),     
+                'URAI': int(msg.DF490)        
             }
 
-            # 更新缓存
-            # 注意：BDS Toe 是周内秒，直接用于判断更新
             self._update_cache(key, eph, 'Toe')
             
         except AttributeError:
-            # 捕获可能的解析错误（如消息不完整）
             pass
 
     def _handle_msm_obs(self, msg):
@@ -313,11 +313,13 @@ class RTCMHandler:
             if sys_id not in config.TARGET_SYSTEMS:
                 return None
 
-            # Epoch Time (Receiver Time in seconds of week/day)
+            # Epoch Time (Receiver Time in seconds of week)
             time_attr = cfg["time_df"]
             if not hasattr(msg, time_attr):
                 return None
             epoch_time = getattr(msg, time_attr) / 1000.0
+            if sys_id == 'R': # GLONASS is time of day
+                epoch_time = epoch_time - 3*60*60 + self.gps_day_of_week() * 24*3600
             epoch_data = EpochObservation(gps_time=epoch_time)
 
             # ------------------------------ Cell Parsing -------------------------------
@@ -359,7 +361,7 @@ class RTCMHandler:
                     epoch_data.satellites[sat_key] = sat_state
                     
                     # ================================================================
-                    # NEW LOGIC: Calculate Satellite Position & Az/El
+                    # Calculate Satellite Position & Az/El
                     # ================================================================
                     if sat_key in self.ephemeris_cache:
                         eph_data = self.ephemeris_cache[sat_key]
@@ -451,3 +453,14 @@ class RTCMHandler:
                     sat_state.signals[sig_id] = obs
 
             return epoch_data
+
+    def gps_day_of_week(self):
+        utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+        gpst = utc + timedelta(seconds=18)
+        
+        gps_epoch = datetime(1980, 1, 6, tzinfo=timezone.utc)
+        
+        delta_days = (gpst - gps_epoch).days
+        gdow = delta_days % 7
+
+        return gdow

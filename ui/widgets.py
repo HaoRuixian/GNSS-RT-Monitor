@@ -1,27 +1,31 @@
 # ui/widgets.py
 import numpy as np
 import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+matplotlib.use('QtAgg')
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 from collections import defaultdict
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
 
 from ui.color_def import get_sys_color, get_signal_color
 
 class SkyplotWidget(FigureCanvas):
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(4, 4), dpi=100, facecolor='#f0f0f0')
+        self.fig = Figure(figsize=(4, 4), dpi=100, facecolor='#ffffff')
         self.ax = self.fig.add_subplot(111, projection='polar')
         super().__init__(self.fig)
         self.setParent(parent)
+        # 初始化时只设置一次坐标轴，后续不再重建
         self.init_plot()
+        # 用于存储绘图对象，以便更新时删除
+        self.scatter_artists = []
+        self.text_artists = []
 
     def init_plot(self):
-        self.ax.clear()
+        """初始化坐标轴，只调用一次"""
         self.ax.set_theta_zero_location('N')
         self.ax.set_theta_direction(-1)
         self.ax.set_rlim(90, 0)
@@ -31,11 +35,20 @@ class SkyplotWidget(FigureCanvas):
         self.ax.set_title("Skyplot", pad=10, fontsize=9, fontweight='bold')
 
     def update_satellites(self, satellites, active_systems):
-        self.ax.clear()
-        self.init_plot()
+        """更新卫星数据，只更新绘图对象，不重建坐标轴"""
+        # 删除旧的绘图对象
+        for artist in self.scatter_artists:
+            artist.remove()
+        for artist in self.text_artists:
+            artist.remove()
+        self.scatter_artists.clear()
+        self.text_artists.clear()
         
-        # 过滤并绘制
-        for key, sat in satellites.items():
+        # 线程安全：创建字典副本，避免在遍历时字典被其他线程修改
+        satellites_snapshot = dict(satellites)
+        
+        # 绘制新的数据
+        for key, sat in satellites_snapshot.items():
             if key[0] not in active_systems: continue # 过滤系统
 
             el = getattr(sat, "el", getattr(sat, "elevation", None))
@@ -43,10 +56,14 @@ class SkyplotWidget(FigureCanvas):
             
             if el is not None and az is not None:
                 color = get_sys_color(key[0])
-                self.ax.scatter(np.radians(az), el, c=color, s=100, alpha=0.8, edgecolors='white')
-                self.ax.text(np.radians(az), el, key, fontsize=8, ha='center', va='bottom', fontweight='bold')
+                scatter = self.ax.scatter(np.radians(az), el, c=color, s=100, alpha=0.8, edgecolors='white')
+                text = self.ax.text(np.radians(az), el, key, fontsize=8, ha='center', va='bottom', fontweight='bold')
+                self.scatter_artists.append(scatter)
+                self.text_artists.append(text)
         
-        self.draw()
+        # 性能优化：只在有数据变化时才重绘
+        if self.scatter_artists:
+            self.draw_idle()  # 使用draw_idle而不是draw，更高效
 
 class MultiSignalBarWidget(FigureCanvas):
     """分组柱状图：显示每颗卫星的所有频点 SNR"""
@@ -56,17 +73,39 @@ class MultiSignalBarWidget(FigureCanvas):
         super().__init__(self.fig)
         self.setParent(parent)
         self.fig.subplots_adjust(bottom=0.25, top=0.9, left=0.08, right=0.98)
+        # 初始化坐标轴，只设置一次
+        self.ax.set_ylim(0, 60)
+        self.ax.set_ylabel("SNR (dB-Hz)")
+        self.ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+        # 存储绘图对象
+        self.bar_artists = []
+        self.legend_handles = {}
 
     def update_data(self, satellites, active_systems):
-        self.ax.clear()
+        # 删除旧的柱状图
+        for bars in self.bar_artists:
+            for bar in bars:
+                bar.remove()
+        self.bar_artists.clear()
+        
+        # 清除图例
+        if self.ax.legend_:
+            self.ax.legend_.remove()
+        
+        # 线程安全：创建字典副本，避免在遍历时字典被其他线程修改
+        satellites_snapshot = dict(satellites)
         
         # 1. 过滤卫星
-        valid_sats = {k: v for k, v in satellites.items() if k[0] in active_systems}
+        valid_sats = {k: v for k, v in satellites_snapshot.items() if k[0] in active_systems}
         sorted_keys = sorted(valid_sats.keys())
         
         if not sorted_keys:
-            self.ax.text(0.5, 0.5, "No Satellites for selected systems", ha='center', va='center')
-            self.draw()
+            # 清除可能存在的文本
+            for text in self.ax.texts:
+                if text.get_text() == "No Satellites for selected systems":
+                    text.remove()
+            self.ax.text(0.5, 0.5, "No Satellites for selected systems", ha='center', va='center', transform=self.ax.transAxes)
+            self.draw_idle()
             return
 
         # 2. 收集所有出现的信号名称以便做 Legend
@@ -102,8 +141,8 @@ class MultiSignalBarWidget(FigureCanvas):
                 # 保存: (x坐标索引, 偏移量, SNR值)
                 sig_plot_data[code].append((sat_map[k], offset, snr))
 
-        # 4. 绘制
-        legend_handles = {} 
+        # 4. 绘制（只更新数据，不重建坐标轴）
+        self.legend_handles.clear()
         
         # 按频段排序 Legend (让 1C, 1W 在一起，2C, 2W 在一起)
         sorted_all_signals = sorted(list(all_signals_set))
@@ -115,29 +154,29 @@ class MultiSignalBarWidget(FigureCanvas):
             x_vals = [d[0] + d[1] for d in data_points] # Base X + Offset
             y_vals = [d[2] for d in data_points]
             
-            # === 修改点：调用新的颜色函数 ===
+            # 调用颜色函数
             color = get_signal_color(code)
-            # ==============================
             
-            bars = self.ax.bar(x_vals, y_vals, width=bar_width, color=color, alpha=0.9, label=code, edgecolor='none')
-            legend_handles[code] = bars[0]
+            # 添加边框以增强区分度，边框颜色比柱体稍深
+            bars = self.ax.bar(x_vals, y_vals, width=bar_width, color=color, alpha=0.95, 
+                             label=code, edgecolor='black', linewidth=0.5)
+            self.bar_artists.append(bars)
+            self.legend_handles[code] = bars[0]
 
-        # 5. 设置坐标轴
+        # 5. 更新坐标轴标签（不重建坐标轴）
         self.ax.set_xticks(x_indices)
         self.ax.set_xticklabels(sorted_keys, rotation=90, fontsize=9, fontweight='bold')
-        self.ax.set_ylim(0, 60)
-        self.ax.set_ylabel("SNR (dB-Hz)")
-        self.ax.grid(True, axis='y', linestyle='--', alpha=0.5)
         
-        # 6. 自定义图例
-        if legend_handles:
+        # 6. 更新图例
+        if self.legend_handles:
             # 动态调整图例列数，避免太长
-            ncol = min(len(legend_handles), 8)
-            self.ax.legend(handles=legend_handles.values(), labels=legend_handles.keys(), 
+            ncol = min(len(self.legend_handles), 8)
+            self.ax.legend(handles=self.legend_handles.values(), labels=self.legend_handles.keys(), 
                            loc='upper center', bbox_to_anchor=(0.5, 1.15),
                            ncol=ncol, fontsize='small', frameon=False)
             
-        self.draw()
+        # 性能优化：使用draw_idle而不是draw，更高效
+        self.draw_idle()
 
 
 class PlotSNRWidget(QWidget):
@@ -172,15 +211,21 @@ class PlotSNRWidget(QWidget):
         layout.addWidget(self.canvas)
         
         # 设置策略，让画布尽可能扩展
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def update_plot(self, prn, data, mode):
         """
         mode: "Time Sequence", "Elevation", "sin(Elevation)"
+        优化：只更新数据，不重建坐标轴
         """
-        self.ax.clear()
+        # 删除旧的绘图对象
+        for line in self.ax.lines:
+            line.remove()
+        for collection in self.ax.collections:
+            collection.remove()
+        
         if not data:
-            self.canvas.draw()
+            self.canvas.draw_idle()
             return
 
         # --- 数据预处理：过滤高度角 <= 0 的数据 ---
@@ -194,7 +239,7 @@ class PlotSNRWidget(QWidget):
         
         # 如果过滤完没数据了，直接返回
         if not valid_data:
-            self.canvas.draw()
+            self.canvas.draw_idle()
             return
 
         # 提取所有出现的信号
@@ -224,7 +269,7 @@ class PlotSNRWidget(QWidget):
                 # 普通 Elevation 模式
                 self.ax.scatter(els, vals, s=10, label=sig, color=color, alpha=0.6)
 
-        # --- 设置 X 轴格式 ---
+        # --- 更新 X 轴格式（不重建）---
         if "Time" in mode:
             self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
             self.ax.set_xlabel("Time")
@@ -235,14 +280,21 @@ class PlotSNRWidget(QWidget):
         else:
             self.ax.set_xlabel("Elevation (°)")
 
-        # --- 设置通用属性 ---
+        # --- 更新通用属性（不重建）---
         self.ax.set_ylabel("SNR (dB-Hz)")
         self.ax.set_ylim(0, 60)
         self.ax.set_title(f"Satellite: {prn}", y=1.12, fontsize=10, fontweight='bold')
         
-        self.ax.grid(True, linestyle=':', alpha=0.6)
+        # 网格只设置一次，不需要每次更新
+        if not hasattr(self, '_grid_initialized'):
+            self.ax.grid(True, linestyle=':', alpha=0.6)
+            self._grid_initialized = True
 
+        # 更新图例
+        if self.ax.legend_:
+            self.ax.legend_.remove()
         self.ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), 
                        ncol=6, fontsize='small', frameon=False)
         
-        self.canvas.draw()
+        # 性能优化：使用draw_idle而不是draw，更高效
+        self.canvas.draw_idle()

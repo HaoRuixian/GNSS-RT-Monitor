@@ -71,29 +71,44 @@ def get_signal_color(sig_code):
 
     # Assign color by band + suffix combination
     if band == '1':
-        if suffix in ['C', 'S', 'A']: return '#2196F3'
-        if suffix in ['W', 'P', 'Y']: return '#0D47A1'
-        if suffix in ['L', 'X', 'Z']: return '#00BCD4'
-        if suffix in ['I']:           return '#64B5F6'
-        return '#2196F3'
+        # L1 band - blue series, but increase the difference    
+        if suffix in ['C', 'S', 'A']: return '#1976D2'  # Standard blue - more saturated
+        if suffix in ['W', 'P', 'Y']: return '#0D47A1'  # Deep blue - keep
+        if suffix in ['L', 'X', 'Z']: return '#42A5F5'  # Light blue - brighter and more obvious
+        if suffix in ['I']:           return '#90CAF9'  # Very light blue - obvious difference
+        if suffix in ['B']:           return '#1565C0'  # Medium blue
+        return '#2196F3'  # Default blue
 
     elif band == '2':
-        if suffix in ['C', 'I']:      return '#FF5722'
-        if suffix in ['W', 'P', 'Y']: return '#B71C1C'
-        if suffix in ['L', 'S', 'X']: return '#FF9800'
-        if suffix in ['Q']:           return '#FFCC80'
-        return '#F44336'
+        # L2频段 - 红色/橙色系，增加明显差异
+        if suffix in ['C', 'I']:      return '#E53935'  # 鲜红 - 更饱和
+        if suffix in ['W', 'P', 'Y']: return '#B71C1C'  # 深红 - 保持
+        if suffix in ['L', 'S', 'X']: return '#FF6F00'  # 橙色 - 更鲜明
+        if suffix in ['Q']:           return '#FFB74D'  # 浅橙 - 明显区别
+        if suffix in ['D']:           return '#D32F2F'  # 中红
+        return '#F44336'  # 默认红
 
     elif band == '5':
-        if suffix in ['Q', 'X']:      return '#4CAF50'
-        if suffix in ['I', 'D']:      return '#1B5E20'
-        if suffix in ['P']:           return '#8BC34A'
-        return '#4CAF50'
+        # L5频段 - 绿色系，增加明显差异
+        if suffix in ['Q', 'X']:      return '#388E3C'  # 深绿 - 更饱和
+        if suffix in ['I', 'D']:      return '#1B5E20'  # 很深的绿 - 保持
+        if suffix in ['P']:           return '#66BB6A'  # 浅绿 - 更明显
+        if suffix in ['A']:           return '#A5D6A7'  # 很浅的绿 - 明显区别
+        return '#4CAF50'  # 默认绿
 
     elif band == '6':
-        return '#9C27B0'
+        # L6频段 - 紫色系，增加不同频点的区分
+        if suffix in ['I']:           return '#7B1FA2'  # 深紫
+        if suffix in ['Q']:           return '#BA68C8'  # 浅紫
+        if suffix in ['X']:           return '#9C27B0'  # 标准紫
+        return '#9C27B0'  # 默认紫
 
     elif band == '7':
-        return '#FFC107'
+        # E7/E8频段 - 黄色/琥珀色系
+        if suffix in ['Q']:           return '#F57C00'  # 深橙黄
+        if suffix in ['I']:           return '#FFB300'  # 中黄
+        if suffix in ['X']:           return '#FFC107'  # 标准黄
+        if suffix in ['A', 'B']:      return '#FFD54F'  # 浅黄
+        return '#FFC107'  # 默认黄
 
-    return '#9E9E9E'
+    return '#9E9E9E'  # 默认灰色

@@ -1,8 +1,9 @@
 # ui/dialogs.py
 import importlib.util
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QGroupBox, QFormLayout, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QGroupBox, QFormLayout, 
                              QLineEdit, QCheckBox, QHBoxLayout, QPushButton, 
-                             QFileDialog, QMessageBox)
+                             QFileDialog, QMessageBox, QStyle)
+from PyQt6.QtGui import QIcon
 
 class ConfigDialog(QDialog):
     def __init__(self, parent=None, initial_settings=None):
@@ -23,12 +24,12 @@ class ConfigDialog(QDialog):
         self.obs_m = QLineEdit(self.settings.get('OBS', {}).get('mountpoint',''))
         self.obs_u = QLineEdit(self.settings.get('OBS', {}).get('user',''))
         self.obs_pw = QLineEdit(self.settings.get('OBS', {}).get('password',''))
-        self.obs_pw.setEchoMode(QLineEdit.Password)
+        self.obs_pw.setEchoMode(QLineEdit.EchoMode.Password)
         fl.addRow("Host:", self.obs_h)
         fl.addRow("Port:", self.obs_p)
         fl.addRow("Mount:", self.obs_m)
         fl.addRow("User:", self.obs_u)
-        fl.addRow("Pass:", self.obs_pw)
+        fl.addRow("Pwd:", self.obs_pw)
         grp.setLayout(fl)
         layout.addWidget(grp)
         
@@ -44,19 +45,28 @@ class ConfigDialog(QDialog):
         self.eph_m = QLineEdit(self.settings.get('EPH', {}).get('mountpoint',''))
         self.eph_u = QLineEdit(self.settings.get('EPH', {}).get('user',''))
         self.eph_pw = QLineEdit(self.settings.get('EPH', {}).get('password',''))
-        self.eph_pw.setEchoMode(QLineEdit.Password)
+        self.eph_pw.setEchoMode(QLineEdit.EchoMode.Password)
         fl2.addRow("Host:", self.eph_h)
         fl2.addRow("Port:", self.eph_p)
         fl2.addRow("Mount:", self.eph_m)
         fl2.addRow("User:", self.eph_u)
-        fl2.addRow("Pass:", self.eph_pw)
+        fl2.addRow("Pwd:", self.eph_pw)
         grp2.setLayout(fl2)
         layout.addWidget(grp2)
         
         btns = QHBoxLayout()
         b_load = QPushButton("Load File")
+        # 添加打开文件图标
+        open_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        if not open_icon.isNull():
+            b_load.setIcon(open_icon)
         b_load.clicked.connect(self.load_file)
-        b_save = QPushButton("Save & Connect")
+        
+        b_save = QPushButton("Connect")
+        # 添加保存图标
+        save_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        if not save_icon.isNull():
+            b_save.setIcon(save_icon)
         b_save.clicked.connect(self.accept)
         btns.addWidget(b_load)
         btns.addStretch()
